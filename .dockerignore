@@ -1,0 +1,32 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# Data files (mount as volume instead)
+data/*.db
+data/*.csv
+
+# Model training artifacts (not needed for inference)
+models/*/training_args.bin
+models/*/optimizer.pt
+models/*/scheduler.pt
+models/*/checkpoint-*
