@@ -52,8 +52,11 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(predict.router, prefix="/predict")  # ✅ Added prefix
-app.include_router(admin.router, prefix="/admin")      # ✅ Added prefix
+# predict.py has NO prefix in its router, so add it here
+app.include_router(predict.router, prefix="/predict")
+
+# admin.py ALREADY has prefix="/admin" in its router, so DON'T add it here
+app.include_router(admin.router)
 
 
 @app.get("/health")
@@ -76,6 +79,7 @@ async def root():
             "batch": "POST /predict/batch",
             "feedback": "POST /admin/feedback",
             "stats": "GET /admin/stats",
+            "recent": "GET /admin/recent",
             "health": "GET /health",
         }
     }
