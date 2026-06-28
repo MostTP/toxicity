@@ -1,11 +1,10 @@
-
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from sqlalchemy import (
-    create_engine, Column, String, Float, Integer, DateTime,
+    create_engine, Column, String, Float, Integer, DateTime, Text,
     select, func, and_, text
 )
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -33,6 +32,18 @@ class Prediction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     feedback_label = Column(Integer, nullable=True)
     feedback_reason = Column(String, nullable=True)
+
+
+class GeneralFeedback(Base):
+    """Stores general user feedback (ratings, bugs, features, etc.)."""
+    __tablename__ = "general_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rating = Column(Integer, nullable=False)
+    type = Column(String(20), nullable=False)
+    text = Column(Text, nullable=False)
+    email = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # Sync engine for initialization
@@ -104,6 +115,54 @@ async def save_feedback(
     prediction.feedback_reason = reason
     await session.commit()
     return True
+
+
+async def save_general_feedback(
+    session: AsyncSession,
+    rating: int,
+    type: str,
+    text: str,
+    email: Optional[str] = None,
+) -> int:
+    """Save general user feedback and return its ID."""
+    entry = GeneralFeedback(
+        rating=rating,
+        type=type,
+        text=text,
+        email=email,
+        created_at=datetime.utcnow(),
+    )
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry.id
+
+
+async def get_general_feedback(
+    session: AsyncSession,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List general feedback submissions."""
+    count_result = await session.execute(
+        select(func.count()).select_from(GeneralFeedback)
+    )
+    total = count_result.scalar()
+
+    result = await session.execute(
+        select(GeneralFeedback)
+        .order_by(desc(GeneralFeedback.created_at))
+        .limit(limit)
+        .offset(offset)
+    )
+    items = result.scalars().all()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": items,
+    }
 
 
 async def get_daily_stats(session: AsyncSession, days: int = 1):

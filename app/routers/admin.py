@@ -1,5 +1,6 @@
 """Admin and monitoring endpoints."""
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,13 +8,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, text, func
 
-from app.db import get_db, save_feedback, get_daily_stats, get_feedback_stats, Prediction
+from app.db import (
+    get_db, save_feedback, get_daily_stats, get_feedback_stats,
+    save_general_feedback, get_general_feedback, Prediction, GeneralFeedback
+)
 from app.services.drift import drift_tracker
 from app.services.model_loader import model_manager
 from app.services.cache import cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+
+# --- Existing: Prediction Correction Feedback ---
 
 class FeedbackRequest(BaseModel):
     request_id: str = Field(..., description="UUID from /predict response")
@@ -24,6 +30,31 @@ class FeedbackRequest(BaseModel):
 class FeedbackResponse(BaseModel):
     status: str
     original_prediction: dict
+
+
+# --- NEW: General User Feedback ---
+
+class GeneralFeedbackCreate(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    type: str = Field(..., description="general|bug|feature|accuracy")
+    text: str = Field(..., min_length=1, max_length=5000)
+    email: Optional[str] = Field(default=None, max_length=255)
+
+
+class GeneralFeedbackItem(BaseModel):
+    id: int
+    rating: int
+    type: str
+    text: str
+    email: Optional[str]
+    created_at: Optional[str]
+
+
+class GeneralFeedbackListResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[GeneralFeedbackItem]
 
 
 class ThresholdUpdate(BaseModel):
@@ -38,6 +69,8 @@ class StatsResponse(BaseModel):
     quality: dict
     drift: dict
 
+
+# --- Routes ---
 
 @router.post("/feedback", response_model=FeedbackResponse)
 async def submit_feedback(request: FeedbackRequest, db: AsyncSession = Depends(get_db)):
@@ -58,6 +91,54 @@ async def submit_feedback(request: FeedbackRequest, db: AsyncSession = Depends(g
             "request_id": request.request_id,
             "your_feedback": request.correct_label,
         }
+    }
+
+
+@router.post("/general-feedback")
+async def submit_general_feedback(
+    request: GeneralFeedbackCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Submit general user feedback (ratings, bugs, features, etc.)."""
+    feedback_id = await save_general_feedback(
+        session=db,
+        rating=request.rating,
+        type=request.type,
+        text=request.text,
+        email=request.email,
+    )
+
+    return {
+        "status": "recorded",
+        "id": feedback_id,
+        "received_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/general-feedback", response_model=GeneralFeedbackListResponse)
+async def list_general_feedback(
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    """List general feedback submissions."""
+    result = await get_general_feedback(db, limit=limit, offset=offset)
+
+    return {
+        "total": result["total"],
+        "limit": result["limit"],
+        "offset": result["offset"],
+        "items": [
+            {
+                "id": item.id,
+                "rating": item.rating,
+                "type": item.type,
+                "text": item.text,
+                "email": item.email,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            }
+            for item in result["items"]
+        ],
     }
 
 
@@ -105,11 +186,9 @@ async def get_recent(
     db: AsyncSession = Depends(get_db)
 ):
     """Get recent predictions with pagination."""
-    # Get total count
     count_result = await db.execute(select(func.count()).select_from(Prediction))
     total = count_result.scalar()
     
-    # Get paginated results
     result = await db.execute(
         select(Prediction)
         .order_by(desc(Prediction.created_at))
@@ -186,12 +265,12 @@ async def clear_cache():
     cache.clear()
     return {"status": "cache cleared"}
 
+
 @router.get("/model-stats")
 async def get_model_stats(days: int = 7, db: AsyncSession = Depends(get_db)):
     """Get model usage and accuracy stats."""
     since = text(f"datetime('now', '-{days} days')")
     
-    # Get per-model stats
     result = await db.execute(
         select(
             Prediction.model_used,
@@ -240,7 +319,6 @@ async def get_language_stats(days: int = 7, db: AsyncSession = Depends(get_db)):
             "count": count,
         })
     
-    # Calculate percentages
     for lang in languages:
         lang["percentage"] = round(lang["count"] / total * 100, 1) if total > 0 else 0
     
