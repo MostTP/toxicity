@@ -1,47 +1,27 @@
-#!/usr/bin/env python3
-from pathlib import Path
 import sys
+sys.path.insert(0, '.')
 
-try:
-    from app.config import settings
-    from app.services.model_loader import model_manager
-except ImportError as e:
-    print(f"❌ Import failed: {e}")
-    print("Make sure you're running from the project root directory.")
-    sys.exit(1)
+from app.services.model_loader import model_manager
 
-print("=" * 50)
-print("MODEL PATH CHECK")
-print("=" * 50)
+print("=== MODEL LOADER DIAGNOSTIC ===")
+print(f"svm_tokenizer exists: {model_manager.svm_tokenizer is not None}")
+print(f"svm_mbert_base exists: {model_manager.svm_mbert_base is not None}")
+print(f"svm exists: {model_manager.svm is not None}")
+print(f"tokenizer exists: {model_manager.tokenizer is not None}")
+print(f"mbert_base exists: {model_manager.mbert_base is not None}")
 
-paths = {
-    "SVM": settings.svm_path,
-    "mBERT": settings.mbert_path,
-    "CNN": settings.cnn_path,
-}
+if model_manager.svm_tokenizer:
+    print(f"\nSVM tokenizer vocab size: {len(model_manager.svm_tokenizer)}")
+if model_manager.tokenizer:
+    print(f"Main tokenizer vocab size: {len(model_manager.tokenizer)}")
 
-for name, path in paths.items():
-    exists = path.exists()
-    symbol = "✅" if exists else "❌"
-    print(f"{symbol} {name}: {path}")
-    if exists and path.is_dir():
-        files = list(path.iterdir())
-        print(f"   Contains {len(files)} files: {[f.name for f in files[:5]]}{'...' if len(files) > 5 else ''}")
-    elif exists:
-        print(f"   Size: {path.stat().st_size / 1024 / 1024:.2f} MB")
+# Test encoding same text with both
+text = "You are an idiot"
+if model_manager.svm_tokenizer:
+    svm_tokens = model_manager.svm_tokenizer.encode(text)
+    print(f"\nSVM tokenizer tokens: {svm_tokens[:10]}...")
+if model_manager.tokenizer:
+    main_tokens = model_manager.tokenizer.encode(text)
+    print(f"Main tokenizer tokens: {main_tokens[:10]}...")
 
-print("\n" + "=" * 50)
-print("MODEL LOADING CHECK")
-print("=" * 50)
-
-model_manager.load_all()
-
-for model_name, status in model_manager.status["models"].items():
-    loaded = status == "loaded"
-    symbol = "✅" if loaded else "❌"
-    print(f"{symbol} {model_name}: {status}")
-
-print("\n" + "=" * 50)
-print(f"Device: {model_manager.status['device']}")
-print(f"GPU Available: {model_manager.status['gpu_available']}")
-print("=" * 50)
+print("\nStatus:", model_manager.status)

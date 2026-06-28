@@ -19,12 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def _hash_text(text: str) -> str:
-    """Create deterministic hash for deduplication."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _detect_language(text: str) -> str:
-    """Detect language code, fallback to 'unknown'."""
     try:
         return detect(text)
     except LangDetectException:
@@ -32,15 +30,14 @@ def _detect_language(text: str) -> str:
 
 
 def _get_threshold(language: str) -> float:
-    """Get language-specific threshold."""
     return settings.thresholds.get(language, settings.thresholds["default"])
 
 
 class Predictor:
-    """Main prediction service."""
-
     def __init__(self):
-        self.svm_fallback_threshold = 0.92
+        # DISABLED: SVM model is corrupted (sklearn version mismatch)
+        # Only mBERT and CNN are functional
+        pass
 
     def predict_single(
         self,
@@ -50,21 +47,16 @@ class Predictor:
         language: Optional[str] = None,
         thread_id: Optional[str] = None,
     ) -> Dict:
-        """Classify a single text."""
         start_time = time.time()
-        text_hash = _hash_text(text)
 
-        # Check cache
         cached = cache.get(text, model)
         if cached:
             cached["cached"] = True
             return cached
 
-        # Detect language
         detected_lang = language or _detect_language(text)
         threshold = _get_threshold(detected_lang)
 
-        # Route to appropriate model
         result = self._run_inference(text, model, threshold)
 
         latency_ms = int((time.time() - start_time) * 1000)
@@ -84,50 +76,36 @@ class Predictor:
             "cached": False,
         }
 
-        # Record for drift detection
         drift_tracker.record(float(result["confidence"]))
-
-        # Cache result
         cache.set(text, model, response)
-
         return response
 
-    def _run_inference(
-        self, text: str, model: str, threshold: float
-    ) -> Dict:
-        """Run the actual model inference."""
-
-        # AUTO routing: try SVM first, escalate if uncertain
+    def _run_inference(self, text: str, model: str, threshold: float) -> Dict:
         if model == "auto":
-            if model_manager.svm is not None:
-                svm_conf, svm_label = self._svm_predict([text])
-                svm_conf = float(svm_conf[0])
-
-                # Clear case: high confidence
-                if svm_conf > self.svm_fallback_threshold or svm_conf < (1 - self.svm_fallback_threshold):
-                    return self._format_result(svm_conf, "svm", threshold)
-
-                # Uncertain: use mBERT
+            # Try CNN first (fast, well-calibrated)
+            if model_manager.cnn is not None:
+                cnn_conf, _ = self._cnn_predict([text])
+                cnn_conf = float(cnn_conf[0])
+                # Use CNN if confident, otherwise fall back to mBERT
+                if cnn_conf > 0.92 or cnn_conf < 0.20:
+                    return self._format_result(cnn_conf, "cnn", threshold)
+                
                 if model_manager.mbert is not None:
                     mbert_conf, _ = self._mbert_predict([text])
                     return self._format_result(float(mbert_conf[0]), "mbert", threshold)
+                
+                return self._format_result(cnn_conf, "cnn", threshold)
 
-                # mBERT unavailable, use SVM anyway
-                return self._format_result(svm_conf, "svm", threshold)
-
-            # No SVM, try mBERT
+            # No CNN, use mBERT
             if model_manager.mbert is not None:
                 mbert_conf, _ = self._mbert_predict([text])
                 return self._format_result(float(mbert_conf[0]), "mbert", threshold)
 
             raise RuntimeError("No models available")
 
-        # Explicit model selection
         if model == "svm":
-            if model_manager.svm is None:
-                raise RuntimeError("SVM model not loaded")
-            conf, _ = self._svm_predict([text])
-            return self._format_result(float(conf[0]), "svm", threshold)
+            # SVM is disabled due to corrupted model file
+            raise RuntimeError("SVM model is corrupted (sklearn version mismatch). Please use 'mbert' or 'cnn'.")
 
         elif model == "mbert":
             if model_manager.mbert is None:
@@ -144,21 +122,7 @@ class Predictor:
         else:
             raise ValueError(f"Unknown model: {model}")
 
-    def _svm_predict(self, texts: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """SVM prediction on mBERT embeddings."""
-        embeddings = model_manager.get_embeddings(texts)
-
-        # SGDClassifier: decision_function gives distance to hyperplane
-        decisions = model_manager.svm.decision_function(embeddings)
-
-        # Convert to probability-like score using sigmoid
-        probs = 1 / (1 + np.exp(-decisions))
-
-        labels = (decisions > 0).astype(int)
-        return probs, labels
-
     def _mbert_predict(self, texts: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """Fine-tuned mBERT prediction."""
         enc = model_manager.tokenizer(
             texts, truncation=True, padding=True,
             max_length=128, return_tensors="pt"
@@ -168,14 +132,19 @@ class Predictor:
 
         with torch.no_grad():
             outputs = model_manager.mbert(input_ids=input_ids, attention_mask=attention_mask)
-            probs = torch.softmax(outputs.logits, dim=1)[:, 1].cpu().numpy()
+            num_labels = outputs.logits.shape[-1]
+            
+            if num_labels == 6:
+                probs_per_label = torch.sigmoid(outputs.logits)
+                probs = probs_per_label.max(dim=1).values.cpu().numpy()
+            else:
+                probs = torch.softmax(outputs.logits, dim=1)[:, 1].cpu().numpy()
 
         labels = (probs > 0.5).astype(int)
         return probs, labels
 
     def _cnn_predict(self, texts: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """CNN + mBERT prediction."""
-        enc = model_manager.tokenizer(
+        enc = model_manager.svm_tokenizer(
             texts, truncation=True, padding="max_length",
             max_length=128, return_tensors="pt"
         )
@@ -190,14 +159,12 @@ class Predictor:
         return probs, labels
 
     def _format_result(self, confidence, model_used, threshold):
-        """Format raw confidence into standardized response."""
         confidence = float(confidence)
         threshold = float(threshold)
         
-        # More conservative: require very high confidence
-        if confidence >= 0.90:
+        if confidence >= threshold:
             toxic = True
-        elif confidence <= 0.50:
+        elif confidence <= 0.30:
             toxic = False
         else:
             return {
@@ -224,7 +191,6 @@ class Predictor:
         source: Optional[str] = None,
         language: Optional[str] = None,
     ) -> List[Dict]:
-        """Classify multiple texts."""
         results = []
         for text in texts:
             result = self.predict_single(text, model, source, language)
@@ -232,5 +198,4 @@ class Predictor:
         return results
 
 
-# Singleton
 predictor = Predictor()
