@@ -2,7 +2,7 @@
 
 import gc
 import logging
-import pickle
+import joblib
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -120,8 +120,9 @@ class ModelManager:
 
         try:
             if settings.svm_path.exists():
-                with open(settings.svm_path, "rb") as f:
-                    self.svm = pickle.load(f)
+                pkg = joblib.load(settings.svm_path)
+                self.svm = pkg['svm_model']
+                self.svm_scaler = pkg['scaler']  # EXTRACT SCALER
                 self._status["svm"] = "loaded"
                 logger.info("SVM classifier loaded")
             else:

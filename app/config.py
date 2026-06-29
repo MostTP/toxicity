@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     @property
     def svm_path(self) -> Path:
-        return self.model_dir / "svm" / "svm_model.pkl"
+        return self.model_dir / "svm" / "svm_toxic_detector.pkl"
 
     @property
     def mbert_path(self) -> Path:

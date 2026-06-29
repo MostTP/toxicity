@@ -35,8 +35,6 @@ def _get_threshold(language: str) -> float:
 
 class Predictor:
     def __init__(self):
-        # DISABLED: SVM model is corrupted (sklearn version mismatch)
-        # Only mBERT and CNN are functional
         pass
 
     def predict_single(
@@ -104,8 +102,10 @@ class Predictor:
             raise RuntimeError("No models available")
 
         if model == "svm":
-            # SVM is disabled due to corrupted model file
-            raise RuntimeError("SVM model is corrupted (sklearn version mismatch). Please use 'mbert' or 'cnn'.")
+            if model_manager.svm is None:
+                raise RuntimeError("SVM model not loaded")
+            conf, _ = self._svm_predict([text])
+            return self._format_result(float(conf[0]), "svm", threshold)
 
         elif model == "mbert":
             if model_manager.mbert is None:
@@ -156,6 +156,29 @@ class Predictor:
             probs = torch.softmax(outputs["logits"], dim=1)[:, 1].cpu().numpy()
 
         labels = (probs > 0.5).astype(int)
+        return probs, labels
+
+    def _svm_predict(self, texts: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        """Run SVM prediction with mBERT feature extraction and scaling."""
+        if model_manager.svm is None:
+            raise RuntimeError("SVM model not loaded")
+        if model_manager.svm_mbert_base is None:
+            raise RuntimeError("SVM base model not loaded")
+        if model_manager.svm_tokenizer is None:
+            raise RuntimeError("SVM tokenizer not loaded")
+        if not hasattr(model_manager, 'svm_scaler') or model_manager.svm_scaler is None:
+            raise RuntimeError("SVM scaler not loaded")
+        
+        # Extract embeddings
+        embeddings = model_manager.get_svm_embeddings(texts)
+        
+        # Scale embeddings (critical - SVM was trained on scaled features)
+        scaled = model_manager.svm_scaler.transform(embeddings)
+        
+        # Predict
+        probs = model_manager.svm.predict_proba(scaled)[:, 1]
+        labels = model_manager.svm.predict(scaled)
+        
         return probs, labels
 
     def _format_result(self, confidence, model_used, threshold):
