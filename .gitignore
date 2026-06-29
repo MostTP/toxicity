@@ -1,25 +1,27 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
 
-node_modules
-dist
-dist-ssr
-*.local
-.venv
+# ML Models (never commit weights)
+*.pt
+*.pth
+*.pkl
+*.h5
+*.safetensors
+*.bin
+*.onnx
+app/models/**/model.*
+app/models/**/cnn_best.*
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Data
+*.db
+*.sqlite
+*.csv
+data/
+
+# Environment
+.env
